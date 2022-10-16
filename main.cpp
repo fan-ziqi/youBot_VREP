@@ -1,4 +1,5 @@
 #include <iostream>
+#include <iomanip>
 #include "extApi.h"
 #include "Eigen/Dense"
 #include "modern_robotics.h"
@@ -10,6 +11,7 @@ using namespace mr;
 
 int main()
 {
+
 	//构造齐次变换矩阵的临时变量R和p
 	Eigen::Matrix3d T_R;
 	Eigen::Vector3d T_p;
@@ -48,12 +50,11 @@ int main()
 		return_code = simxGetObjectHandle(clientID, "rollingJoint_rl", &wheel_joints_handle[3], simx_opmode_blocking);
 		if(return_code == simx_return_ok) cout << "get object rollingJoint_rr ok" << endl;
 
-		//准备五个手臂关节的初始值
 		simxInt arm_joints_handle[5] = {-1,-1,-1,-1,-1};
 		for(int i = 0; i < 5; i++)
 		{
 			string str = "Joint" + to_string(i+1);
-			return_code = simxGetObjectHandle(clientID, str.c_str(), &wheel_joints_handle[i], simx_opmode_blocking);
+			return_code = simxGetObjectHandle(clientID, str.c_str(), &arm_joints_handle[i], simx_opmode_blocking);
 			if(return_code == simx_return_ok) cout << "get object arm joint " << i+1 << " ok" << endl;
 		}
 
@@ -112,6 +113,12 @@ int main()
 		simxGetObjectPosition(clientID, cube_2_handle, -1, cube_2_position, simx_opmode_blocking);
 		simxFloat cube_goal_position[3];
 		simxGetObjectPosition(clientID, cube_goal_handle, -1, cube_goal_position, simx_opmode_blocking);
+		simxFloat cube_1_orientation[3];
+		simxSetObjectOrientation(clientID, cube_1_handle, -1, cube_1_orientation, simx_opmode_blocking);
+		simxFloat cube_2_orientation[3];
+		simxSetObjectOrientation(clientID, cube_2_handle, -1, cube_2_orientation, simx_opmode_blocking);
+		simxFloat cube_goal_orientation[3];
+		simxSetObjectOrientation(clientID, cube_goal_handle, -1, cube_goal_orientation, simx_opmode_blocking);
 
 		Eigen::MatrixXd T_sc_initial(4, 4);
 		Eigen::MatrixXd T_sc_final(4, 4);
@@ -126,8 +133,8 @@ int main()
 			simxGetJointPosition(clientID, world_joints_handle[0], &youBot_x, simx_opmode_blocking);
 			simxFloat youBot_y;
 			simxGetJointPosition(clientID, world_joints_handle[1], &youBot_y, simx_opmode_blocking);
-			simxFloat youBot_theta;
-			simxGetJointPosition(clientID, world_joints_handle[2], &youBot_theta, simx_opmode_blocking);
+			simxFloat youBot_phi;
+			simxGetJointPosition(clientID, world_joints_handle[2], &youBot_phi, simx_opmode_blocking);
 
 			//获取 youBot 手臂关节角度
 			simxFloat youBot_arm_q[5] = {0, 0, 0, 0, 0};
@@ -148,9 +155,9 @@ int main()
 			simxGetObjectPosition(clientID, gripper_tip_handle, -1, youBot_gripper_position, simx_opmode_blocking);
 
 			//初始化机器人配置
-			//theta x  y  J1 J2 J3 J4 J5 w1 w2 w3 w4 gripper
-			Eigen::MatrixXd config_initial(1, 13);//1x13
-			config_initial << youBot_theta, youBot_x, youBot_y, youBot_arm_q[0], youBot_arm_q[1], youBot_arm_q[2], youBot_arm_q[3], youBot_arm_q[4], youBot_wheel_angles[0], youBot_wheel_angles[1], youBot_wheel_angles[2], youBot_wheel_angles[3], 0;
+			//phi x  y  J1 J2 J3 J4 J5 w1 w2 w3 w4 gripper
+			Eigen::VectorXd config_initial(13);//1x13
+			config_initial << youBot_phi, youBot_x, youBot_y, youBot_arm_q[0], youBot_arm_q[1], youBot_arm_q[2], youBot_arm_q[3], youBot_arm_q[4], youBot_wheel_angles[0], youBot_wheel_angles[1], youBot_wheel_angles[2], youBot_wheel_angles[3], 0;
 
 			//生成轨迹
 			T_R = mr::roty(M_PI/2);
@@ -160,21 +167,21 @@ int main()
 			//两个物块的始末位姿
 			if(i == 0)
 			{
-				T_R = Eigen::MatrixXd::Identity(3, 3);
+				T_R = mr::rotz(cube_1_orientation[2]);
 				T_p << cube_1_position[0], cube_1_position[1], cube_1_position[2];
 				T_sc_initial = RpToTrans(T_R, T_p);
 
-				T_R = mr::rotz(3*M_PI/2);
+				T_R = mr::rotz(cube_goal_orientation[2]);
 				T_p << cube_goal_position[0], cube_goal_position[1], cube_goal_position[2];
 				T_sc_final = RpToTrans(T_R, T_p);
 			}
 			else if(i == 1)
 			{
-				T_R = mr::rotz(0);
+				T_R = mr::rotz(cube_2_orientation[2]);
 				T_p << cube_2_position[0], cube_2_position[1], cube_2_position[2];
 				T_sc_initial = RpToTrans(T_R, T_p);
 
-				T_R = mr::rotz(M_PI);
+				T_R = mr::rotz(cube_goal_orientation[2]);
 				T_p << cube_goal_position[0], cube_goal_position[1], cube_goal_position[2] + 0.05;
 				T_sc_final = RpToTrans(T_R, T_p);
 			}
@@ -192,7 +199,7 @@ int main()
 
 			std::vector<Eigen::MatrixXd> T_se_vector;
 
-			//设置 dt
+			//设置时间间隔 dt
 			float dt = 0.01;
 
 			//夹具状态，0为打开，1为闭合
@@ -206,9 +213,9 @@ int main()
 			                    T_se_vector,
 			                    gripper_state);
 
-			//设置关节限制
-			float joint_limit = 0;
-
+			//设置关节与速度限制
+			float joint_limit = 1;
+			float speeds_max = 1000;
 			//设置 Kp, Ki
 			float Kp = 2.2;
 			float Ki = 0;
@@ -216,7 +223,7 @@ int main()
 			/*主循环*/
 			double desired_wheel_positions[4] = {0, 0, 0, 0};
 			double desired_world_positions[3] = {0, 0, 0};
-			Eigen::MatrixXd new_config = config_initial;//1x13
+			Eigen::VectorXd new_config = config_initial;//13x1
 
 			cout << "正在移动第" << i+1 << "个物块" << endl;
 			for(int j = 0; j < T_se_vector.size() - 1; j++)//最后一个没有next，故需要-1
@@ -227,39 +234,28 @@ int main()
 				//下一机时刻械手的参考Config
 				Eigen::MatrixXd T_sed_next = T_se_vector.at(j + 1);
 
-				//计算速度speeds和X误差X_err
-				Eigen::MatrixXd V(6,1);//6x1
-				Eigen::MatrixXd speeds(1,9);//1x9
-				Eigen::MatrixXd V_err;
-				feedbackControl(new_config, T_sed, T_sed_next,
-				                Kp, Ki, dt, joint_limit,
-				                V, speeds, V_err);
-
-				float speeds_max = 1000;
+				//计算速度speeds
+				Eigen::VectorXd speeds = FeedbackControl(new_config, T_sed, T_sed_next, Kp, Ki, dt, joint_limit);//9x1
 
 				//计算新配置config
-				Eigen::MatrixXd new_config_12 = nextState(new_config,
-														  speeds,
-														  dt,
-														  speeds_max);//1x12
-				new_config << new_config_12, gripper_state(j);//1x13
-
+				Eigen::VectorXd new_config_12 = CountOdom(new_config, speeds, dt, speeds_max);//12x1
+				new_config << new_config_12, gripper_state(j);//13x1
 
 				//准备要发送的命令
-				desired_world_positions[0] = new_config(0, 1);
-				desired_world_positions[1] = new_config(0, 2);
-				desired_world_positions[2] = new_config(0, 0);
+				desired_world_positions[0] = new_config(1);
+				desired_world_positions[1] = new_config(2);
+				desired_world_positions[2] = new_config(0);
 
-				desired_arm_joint_angles[0] = new_config(0, 3);
-				desired_arm_joint_angles[1] = new_config(0, 4);
-				desired_arm_joint_angles[2] = new_config(0, 5);
-				desired_arm_joint_angles[3] = new_config(0, 6);
-				desired_arm_joint_angles[4] = new_config(0, 7);
+				desired_arm_joint_angles[0] = new_config(3);
+				desired_arm_joint_angles[1] = new_config(4);
+				desired_arm_joint_angles[2] = new_config(5);
+				desired_arm_joint_angles[3] = new_config(6);
+				desired_arm_joint_angles[4] = new_config(7);
 
-				desired_wheel_positions[0] = new_config(0, 8);
-				desired_wheel_positions[1] = new_config(0, 9);
-				desired_wheel_positions[2] = new_config(0, 10);
-				desired_wheel_positions[3] = new_config(0, 11);
+				desired_wheel_positions[0] = new_config(8);
+				desired_wheel_positions[1] = new_config(9);
+				desired_wheel_positions[2] = new_config(10);
+				desired_wheel_positions[3] = new_config(11);
 
 				//向VREP中的youBot模型发送命令
 				VREP_armControl(clientID, arm_joints_handle, desired_arm_joint_angles);
@@ -267,7 +263,7 @@ int main()
 				VREP_WorldFrameControl(clientID, world_joints_handle, desired_world_positions);
 
 				//设置夹具状态
-				if(new_config(0,12) == 0)
+				if(new_config(12) == 0)
 				{
 					//开
 					simxSetJointTargetPosition(clientID, gripper_joint_1_handle, 0.015, simx_opmode_oneshot);
@@ -282,7 +278,7 @@ int main()
 				Sleep(2);
 			}
 		}
-
+		Sleep(100);
 		//断开与VREP的连接
 		simxFinish(clientID);
 		cout << "程序结束" << endl;

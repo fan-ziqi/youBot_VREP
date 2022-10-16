@@ -78,7 +78,7 @@ void trajectoryGenerator(const Eigen::MatrixXd& T_se_Start,
 																	 T_se_Up_Start,
 																	 time_Start_to_StartUp,
 																	 (int)(time_Start_to_StartUp * points_per_sec),
-																	 3);
+																	 5);
 	//加入第1段轨迹
 	T_se_vector.insert(T_se_vector.end(), T_se_seg1.begin(), T_se_seg1.end());
 
@@ -90,7 +90,7 @@ void trajectoryGenerator(const Eigen::MatrixXd& T_se_Start,
 																	 T_se_Down,
 																	 time_StartUp_to_StartDown,
 																	 (int)(time_StartUp_to_StartDown * points_per_sec),
-																	 3);
+																	 5);
 	//加入第2段轨迹
 	T_se_vector.insert(T_se_vector.end(), T_se_seg2.begin(), T_se_seg2.end());
 
@@ -104,7 +104,7 @@ void trajectoryGenerator(const Eigen::MatrixXd& T_se_Start,
 																		  T_se_Up_Start,
 																		  time_StartDown_to_StartUp,
 																		  (int)(time_StartDown_to_StartUp * points_per_sec),
-																		  3);
+																		  5);
 	//加入第4段轨迹
 	T_se_vector.insert(T_se_vector.end(), T_se_segment_4.begin(), T_se_segment_4.end());
 
@@ -116,7 +116,7 @@ void trajectoryGenerator(const Eigen::MatrixXd& T_se_Start,
 																		  T_se_Up_End,
 																		  time_StartUp_to_EndUp,
 																		  (int)(time_StartUp_to_EndUp * points_per_sec),
-																		  3);
+																		  5);
 	//加入第5段轨迹
 	T_se_vector.insert(T_se_vector.end(), T_se_segment_5.begin(), T_se_segment_5.end());
 
@@ -128,7 +128,7 @@ void trajectoryGenerator(const Eigen::MatrixXd& T_se_Start,
 																		  T_se_lose,
 																		  time_EndUp_to_EndDown,
 																		  (int)(time_EndUp_to_EndDown * points_per_sec),
-																		  3);
+																		  5);
 	//加入第6段轨迹
 	T_se_vector.insert(T_se_vector.end(), T_se_segment_6.begin(), T_se_segment_6.end());
 
@@ -142,7 +142,7 @@ void trajectoryGenerator(const Eigen::MatrixXd& T_se_Start,
 	                                                                      T_se_Up_End,
 	                                                                      time_EndDown_to_EndUp,
 	                                                                      (int)(time_EndDown_to_EndUp * points_per_sec),
-	                                                                      3);
+	                                                                      5);
 	//加入第8段轨迹
 	T_se_vector.insert(T_se_vector.end(), T_se_segment_8.begin(), T_se_segment_8.end());
 
@@ -169,14 +169,11 @@ void trajectoryGenerator(const Eigen::MatrixXd& T_se_Start,
 	gripper_state = _gripper_state;
 }
 
-void feedbackControl(Eigen::MatrixXd config, //1x13
-					 const Eigen::MatrixXd& T_sed,
-					 const Eigen::MatrixXd& T_sed_next,
-					 float Kp, float Ki, float dt,
-					 float joint_limit,
-					 Eigen::MatrixXd& V_t,//6x1
-					 Eigen::MatrixXd& speeds, //1x9
-					 Eigen::MatrixXd& V_err)
+Eigen::VectorXd FeedbackControl(Eigen::VectorXd config,//13x1
+								const Eigen::MatrixXd& T_sed,
+								const Eigen::MatrixXd& T_sed_next,
+								float Kp, float Ki, float dt,
+								float joint_limit)
 {
 	//构造齐次变换矩阵的临时变量R和p
 	Eigen::Matrix3d T_R;
@@ -191,13 +188,13 @@ void feedbackControl(Eigen::MatrixXd config, //1x13
 		0.033,   0,       0,       0, 0,
 		0,       0,       0,       0, 0;
 	Eigen::VectorXd thetalist(5);
-	thetalist << config.block(0,3,1,5).transpose();
+	thetalist << config.block(3,0,5,1);
 
 	/*1 计算当前末端位姿*/
 	//1.1 计算底盘相对固定坐标系的位姿 T_sb ，与phi、x、y有关。z项为底盘高度，为定值
 	Eigen::MatrixXd T_sb(4, 4);
-	T_R = mr::rotz(config(0,0));
-	T_p << config(0,1), config(0,2), 0.0963;
+	T_R = mr::rotz(config(0));
+	T_p << config(1), config(2), 0.0963;
 	T_sb = RpToTrans(T_R, T_p);
 	//1.2 计算机械臂末端到底盘的变换矩阵 T_b0 ，为固定值
 	Eigen::MatrixXd T_b0(4, 4);
@@ -221,16 +218,19 @@ void feedbackControl(Eigen::MatrixXd config, //1x13
 	Eigen::MatrixXd V_e = mr::Adjoint(T_se.inverse() * T_sed) * V_ed;//6x6 * 6x1 = 6x1
 
 	//计算 V_err = T_eed
-	V_err = mr::se3ToVec(mr::MatrixLog6(T_se.inverse() * T_sed));
+	Eigen::VectorXd V_err = mr::se3ToVec(mr::MatrixLog6(T_se.inverse() * T_sed));//6x1
 
 	//计算用于控制的旋量函数 V(t)
 //	V_t = V_e + Kp * V_err + Ki * (V_err + V_err * dt);//6x1
-	V_t = V_e + Kp * V_err;//6x1 暂时只使用P控制
+	Eigen::VectorXd V_t = V_e + Kp * V_err;//6x1 暂时只使用P控制
 
 	/*计算J_e*/
-	//首先算出J_arm
+	//首先算出关节雅可比 J_arm
 	Eigen::MatrixXd J_arm = mr::JacobianBody(Blist, thetalist);//6x5
-	//然后算出J_base
+	//关节限制
+	if(joint_limit == 1) jointLimits(config,J_arm);
+
+	//然后算出底盘雅可比 J_base
 	double wheel_r = 0.0475;//轮子半径
 	double wheel_l = 0.47/2;
 	double wheel_w = 0.3/2;
@@ -239,133 +239,157 @@ void feedbackControl(Eigen::MatrixXd config, //1x13
 	double wheel_x[4] = {wheel_l, wheel_l, -wheel_l, -wheel_l};
 	double wheel_y[4] = {wheel_w, -wheel_w, -wheel_w, wheel_w};
 
-	/*计算底盘雅可比*/
 	//计算四个轮子的h0，拼成H0
 	Eigen::MatrixXd hi_trans1(1,2);
 	Eigen::MatrixXd hi_trans2(2,2);
 	Eigen::MatrixXd hi_trans3(2,3);
-	std::vector<Eigen::Matrix<double,1,3>> h0(4);
+	Eigen::MatrixXd H0(4, 3);
 	for(int i = 0; i < 4; i++)
 	{
 		hi_trans1 << 1/wheel_r, tan(wheel_gamma[i])/wheel_r;
 		hi_trans2 <<
-		                cos(wheel_beta[i]), sin(wheel_beta[i]),
-				-sin(wheel_beta[i]), cos(wheel_beta[i]);
+			 cos(wheel_beta[i]), sin(wheel_beta[i]),
+			-sin(wheel_beta[i]), cos(wheel_beta[i]);
 		hi_trans3 <<
-		                -wheel_y[i], 1, 0,
-				wheel_x[i], 0, 1;
-		h0.at(i) = hi_trans1 * hi_trans2 * hi_trans3;
+			-wheel_y[i], 1, 0,
+			 wheel_x[i], 0, 1;
+		H0.row(i) = hi_trans1 * hi_trans2 * hi_trans3;
 	}
-	Eigen::MatrixXd H0(4, 3);
-	H0 <<
-		h0.at(0),
-		h0.at(1),
-		h0.at(2),
-		h0.at(3);
 
-	//计算F6
+	//计算H0的伪逆，即为F，并扩展到F6
 	Eigen::MatrixXd F = pinv(H0);//3x4
 	Eigen::MatrixXd F6 = Eigen::MatrixXd::Zero(6, 4);
-	F6.row(2) = F.block(0,0,1,4);
-	F6.row(3) = F.block(1,0,1,4);
-	F6.row(4) = F.block(2,0,1,4);
+	F6.row(2) = F.row(0);
+	F6.row(3) = F.row(1);
+	F6.row(4) = F.row(2);
 
-	//计算J_base
-	Eigen::MatrixXd T_eb = T_se.inverse() * T_sb;
+	//计算 J_base
+//	Eigen::MatrixXd T_eb = T_se.inverse() * T_sb;
+	Eigen::MatrixXd T_eb = T_0e.inverse() * T_b0.inverse();
 	Eigen::MatrixXd J_base = mr::Adjoint(T_eb) * F6;
 
-	//关节限制
-	if(joint_limit == 1) jointLimits(config,J_arm);
-
-	//最后计算J_e
-	Eigen::MatrixXd J_e(J_base.rows(), J_base.cols()+J_arm.cols());
+	//将 J_arm 和 J_base 拼成J_e
+	Eigen::MatrixXd J_e(6, J_base.cols()+J_arm.cols());
 	J_e << J_arm, J_base;//6x9
 
-	//计算速度speeds(1x9)[5arm,4wheel]
-	speeds = (pinv(J_e, 1e-2) * V_t).transpose();//(9x6 * 6x1)' = 1x9
+	//计算速度speeds(9x1)[5arm,4wheel]
+	Eigen::VectorXd speeds = (pinv(J_e, 1e-2) * V_t);//(9x6 * 6x1) = 9x1
+
+	return speeds;
 }
 
-Eigen::MatrixXd nextState(Eigen::MatrixXd& config, //1x13
-						  Eigen::MatrixXd& speeds, //1x9
-						  const float delta_t,
-						  const float speed_max)
+Eigen::MatrixXd CountOdom(Eigen::VectorXd& config, //13x1
+						  Eigen::VectorXd& speeds, //9x1
+						  float delta_t,
+						  float speed_max)
 {
 	//速度限制
-	for(int i = 0; i < speeds.cols(); i++)
+	for(int i = 0; i < speeds.rows(); i++)
 	{
-		if(speeds(0, i) > speed_max) speeds(0, i) = speed_max;
-		else if(speeds(0, i) < -speed_max) speeds(0, i) = -speed_max;
+		if(speeds(i) > speed_max) speeds(i) = speed_max;
+		else if(speeds(i) < -speed_max) speeds(i) = -speed_max;
 	}
 
-	//获得新的机械臂和轮子的config
-	Eigen::MatrixXd new_angle_config = config.block(0,3,1,9) + speeds * delta_t;//1x9
+	//计算新的机械臂 config
+	Eigen::VectorXd new_angle_config = config.block(3, 0, 9, 1) + speeds * delta_t;//9x1
 
 	//使用里程计计算底盘的config
 	//第1步：计算delta_theta，即车轮角度的变化
-	Eigen::MatrixXd delta_theta = speeds.block(0, 5, 1, 4).transpose() * delta_t;//4x1
+	Eigen::MatrixXd delta_theta = speeds.block(5, 0, 4, 1) * delta_t;//4x1
 
 	//第2步：计算轮速
 	Eigen::MatrixXd theta_dot = delta_theta;//4x1
 
 	//第3步：计算底盘旋量Vb
-	float r = 0.0475;
-	float l = 0.47/2;
-	float w = 0.3/2;
-	Eigen::MatrixXd _Vb(3,4);
-	_Vb <<
-		-1/(l+w),1/(l+w),1/(l+w),-1/(l+w),
-		1,1,1,1,
-		-1,1,-1,1;
-	Eigen::MatrixXd Vb = (r/4) * _Vb * theta_dot;//3x4 * 4x1 = 3x1
-
-	//step4: calculate new chassis config
-	//here we write Down dqb
-	Eigen::MatrixXd dqb(3,1);
-	if(Vb(0,0) == 0)
+	//计算四个轮子的h0，拼成H0
+	double wheel_r = 0.0475;//轮子半径
+	double wheel_l = 0.47/2;
+	double wheel_w = 0.3/2;
+	double wheel_gamma[4] = {-M_PI/4, M_PI/4, -M_PI/4, M_PI/4};//辊子角度
+	double wheel_beta[4] = {0, 0, 0, 0};//轮子驱动方向
+	double wheel_x[4] = {wheel_l, wheel_l, -wheel_l, -wheel_l};
+	double wheel_y[4] = {wheel_w, -wheel_w, -wheel_w, wheel_w};
+	Eigen::MatrixXd hi_trans1(1,2);
+	Eigen::MatrixXd hi_trans2(2,2);
+	Eigen::MatrixXd hi_trans3(2,3);
+	Eigen::MatrixXd H0(4, 3);
+	for(int i = 0; i < 4; i++)
 	{
-		dqb <<
+		hi_trans1 << 1/wheel_r, tan(wheel_gamma[i])/wheel_r;
+		hi_trans2 <<
+			 cos(wheel_beta[i]), sin(wheel_beta[i]),
+			-sin(wheel_beta[i]), cos(wheel_beta[i]);
+		hi_trans3 <<
+			-wheel_y[i], 1, 0,
+			 wheel_x[i], 0, 1;
+		H0.row(i) = hi_trans1 * hi_trans2 * hi_trans3;
+	}
+	//计算H0的伪逆，即为F
+	Eigen::MatrixXd F = pinv(H0);//3x4
+	//计算底盘旋量Vb
+	Eigen::VectorXd Vb = F * theta_dot;//3x4 * 4x1 = 3x1
+
+	//第4步：计算新的底盘 config
+	//计算 delta_qb
+	Eigen::MatrixXd delta_qb(3, 1);
+	if(Vb(0) == 0)
+	{
+		delta_qb <<
 			0,
-			Vb(1,0),
-			Vb(2,0);
+			Vb(1),
+			Vb(2);
 
 	}
-	else if(Vb(0,0) != 0)
+	else if(Vb(0) != 0)
 	{
-		dqb <<
-		Vb(0,0),
-		(Vb(1,0)*sin(Vb(0,0))+Vb(2,0)*(cos(Vb(0,0))-1))/Vb(0,0),
-		(Vb(2,0)*sin(Vb(0,0))+Vb(1,0)*(1-cos(Vb(0,0))))/Vb(0,0);
+		delta_qb <<
+			Vb(0),
+			(Vb(1)*sin(Vb(0))+Vb(2)*(cos(Vb(0))-1))/Vb(0),
+			(Vb(2)*sin(Vb(0))+Vb(1)*(1-cos(Vb(0))))/Vb(0);
 	}
-	//here we write Down dq
-	Eigen::MatrixXd _dq(3,3);
-	_dq <<
-		1,0,0,
-		0,cos(config(0,0)),-sin(config(0,0)),
-		0,sin(config(0,0)),cos(config(0,0));
-	Eigen::MatrixXd dq = _dq * dqb;//3x1
-	//here we write Down new chassis config
-	Eigen::MatrixXd new_chassis_config = config.block(0,0,1,3) + dq.transpose();//1x3
+	//计算 delta_q
+	Eigen::MatrixXd rot(3, 3);
+	rot <<
+	    1, 0, 0,
+		0, cos(config(0)), -sin(config(0)),
+		0, sin(config(0)),  cos(config(0));
+	Eigen::MatrixXd delta_q = rot * delta_qb;//3x1
 
-	//here we put the angle and chassis configuration together
-	Eigen::MatrixXd new_config(1, 12);//1x12
+	//计算新的底盘 config
+	Eigen::VectorXd new_chassis_config = config.block(0, 0, 3, 1) + delta_q;//3x1
+
+	//将底盘和机械臂组合成新的config
+	Eigen::VectorXd new_config(12);//12x1
 	new_config << new_chassis_config, new_angle_config;
 
 	return new_config;
 }
 
-void jointLimits(const Eigen::MatrixXd& config,
-				 Eigen::MatrixXd J_arm)
+void jointLimits(Eigen::VectorXd& config,
+				 Eigen::MatrixXd& J_arm)
 {
 	Eigen::VectorXd Limit(6);
 	Limit << 0,0,0,0,0,0;
-	if(config(0,5) > -0.1)
-	{
-		J_arm.col(2) = Limit;
-	}
-	if(config(0,6) > -0.1)
-	{
-		J_arm.col(3) = Limit;
-	}
+//	if(config(3) < -120.0/180.0*M_PI || config(3) > 120.0/180.0*M_PI)
+//	{
+//		J_arm.col(0) = Limit;
+//	}
+//	if(config(4) < -100.0/180.0*M_PI || config(4) > 60.0/180.0*M_PI)
+//	{
+//		J_arm.col(1) = Limit;
+//	}
+//	if(config(5) < -90.0/180.0*M_PI || config(5) > 90.0/180.0*M_PI)
+//	{
+//		J_arm.col(2) = Limit;
+//	}
+//	if(config(6) < -90.0/180.0*M_PI || config(6) > 90.0/180.0*M_PI)
+//	{
+//		J_arm.col(3) = Limit;
+//	}
+//	if(config(7) < -180.0/180.0*M_PI || config(7) > 180.0/180.0*M_PI)
+//	{
+//		J_arm.col(4) = Limit;
+//	}
 }
 
 
